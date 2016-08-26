@@ -173,22 +173,42 @@ bool isCalibrating()
     return (!isAccelerationCalibrationComplete() && sensors(SENSOR_ACC)) || (!isGyroCalibrationComplete());
 }
 
+#define RC_RATE_INCREMENTAL 14.54f
+
 float calculateSetpointRate(int axis, int16_t rc) {
-    float angleRate;
+    float angleRate, rcMax, rcRate, rcSuperfactor;
+    uint8_t rcExpo;
 
-    if (isSuperExpoActive()) {
-        rcInput[axis] = (axis == YAW) ? (ABS(rc) / (500.0f * (currentControlRateProfile->rcYawRate8 / 100.0f))) : (ABS(rc) / (500.0f * (currentControlRateProfile->rcRate8 / 100.0f)));
-        float rcFactor = 1.0f / (constrainf(1.0f - (rcInput[axis] * (currentControlRateProfile->rates[axis] / 100.0f)), 0.01f, 1.00f));
+    if (axis != YAW) {
+        rcExpo = currentControlRateProfile->rcExpo8;
+        rcRate = currentControlRateProfile->rcRate8;
 
-        angleRate = rcFactor * ((27 * rc) / 16.0f);
     } else {
-        angleRate = (float)((currentControlRateProfile->rates[axis] + 27) * rc) / 16.0f;
+        rcExpo = currentControlRateProfile->rcYawExpo8;
+        rcRate = currentControlRateProfile->rcYawRate8;
     }
 
+    if (rcRate > 200) rcRate = rcRate + (RC_RATE_INCREMENTAL * (rcRate - 200));
+    rcMax = 500.0f * (rcRate / 100.0f);
+    rcInput[axis] = ABS(rc) / rcMax;
+
+    if (rcExpo) {
+        float expof = rcExpo / 100.0f;
+        rc = rc * (expof * (rcInput[axis] * rcInput[axis] * rcInput[axis]) + rcInput[axis]*(1-expof));
+    }
+
+    if (currentControlRateProfile->rates[axis]) {
+        rcSuperfactor = 1.0f / (constrainf(1.0f - (rcInput[axis] * (currentControlRateProfile->rates[axis] / 100.0f)), 0.01f, 1.00f));
+    } else {
+        rcSuperfactor = 1.0f;
+    }
+
+    angleRate = rcSuperfactor * 200.0f * rc;
+
     if (currentProfile->pidProfile.pidController == PID_CONTROLLER_LEGACY)
-	    return  constrainf(angleRate, -8190.0f, 8190.0f); // Rate limit protection
+	    return  constrainf(angleRate * 4.1f, -8190.0f, 8190.0f); // Rate limit protection
     else
-        return  constrainf(angleRate / 4.1f, -1997.0f, 1997.0f); // Rate limit protection (deg/sec)
+        return  constrainf(angleRate, -1998.0f, 1998.0f); // Rate limit protection (deg/sec)
 }
 
 void scaleRcCommandToFpvCamAngle(void) {
@@ -298,14 +318,14 @@ static void updateRcCommands(void)
             } else {
                 tmp = 0;
             }
-            rcCommand[axis] = rcLookup(tmp, currentControlRateProfile->rcExpo8, currentControlRateProfile->rcRate8);
+            rcCommand[axis] = tmp;
         } else if (axis == YAW) {
             if (tmp > masterConfig.rcControlsConfig.yaw_deadband) {
                 tmp -= masterConfig.rcControlsConfig.yaw_deadband;
             } else {
                 tmp = 0;
             }
-            rcCommand[axis] = rcLookup(tmp, currentControlRateProfile->rcYawExpo8, currentControlRateProfile->rcYawRate8) * -masterConfig.yaw_control_direction;;
+            rcCommand[axis] = tmp * -masterConfig.yaw_control_direction;;
         }
         if (rcData[axis] < masterConfig.rxConfig.midrc) {
             rcCommand[axis] = -rcCommand[axis];
